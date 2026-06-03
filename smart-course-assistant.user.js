@@ -599,12 +599,20 @@
                 if (seenStems.has(key)) { skipped.dup++; return; }
                 seenStems.add(key);
                 if (q.options.length < 2 || q.options.length > 8) { skipped.opts++; return; }
-                // 跳过批改/复习展示页（所有选项都带 selected 或 isNotReview）
+                // 跳过批改/复习展示页（过半选项带 selected/isNotReview 且无 question-common-abs-choice）
                 const reviewCount = q.options.filter(o => {
                     const c = (o.element?.className || '').toString();
-                    return /\bselected\b/.test(c) || /\bisNotReview\b/.test(c) || /\bis-review\b/i.test(c);
+                    return /\bselected\b/.test(c) || /\bisNotReview\b/.test(c);
                 }).length;
-                if (reviewCount >= q.options.length) { skipped.opts++; return; }
+                const realCount = q.options.filter(o => {
+                    const c = (o.element?.className || '').toString();
+                    return /\bquestion-common-abs-choice\b/.test(c);
+                }).length;
+                // 过半是 review 元素且没有真实的答题选项 → 跳过
+                if (reviewCount >= q.options.length * 0.6 && realCount === 0) {
+                    skipped.review++;
+                    return;
+                }
                 deduped.push(q);
             });
 
@@ -1221,8 +1229,8 @@
                             { role: 'user', content: prompt },
                         ],
                         temperature: 0.1,
-                        max_tokens: 256,
-                        stop: ['\n\n', '解释', '答案'],
+                        max_tokens: 512,
+                        stop: ['\n\n'],
                     }),
                     onload: function (resp) {
                         try {
