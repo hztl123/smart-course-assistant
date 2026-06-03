@@ -1014,7 +1014,7 @@
                 }
                 // 完整鼠标事件链
                 ['mousedown', 'mouseup', 'click'].forEach(type => {
-                    el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+                    el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
                 });
                 // 点击内部 input/radio
                 const inner = el.querySelector('input[type="radio"], input[type="checkbox"]');
@@ -1748,7 +1748,10 @@
                 </div>
                 <!-- 日志 -->
                 <div class="sca-log">
-                    <div class="sca-log-toggle" id="sca-log-toggle">📋 日志 ▸</div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <div class="sca-log-toggle" id="sca-log-toggle">📋 日志 ▸</div>
+                        <button id="sca-btn-copy-log" style="margin-left:auto;font-size:10px;padding:2px 6px;border:1px solid #ddd;border-radius:3px;background:#f5f5f5;cursor:pointer;display:none;">📋 一键复制</button>
+                    </div>
                     <div class="sca-log-area" id="sca-log-area"></div>
                 </div>
                 <!-- 设置 -->
@@ -1874,8 +1877,27 @@
         // 日志折叠
         document.getElementById('sca-log-toggle').addEventListener('click', function () {
             const area = document.getElementById('sca-log-area');
+            const copyBtn = document.getElementById('sca-btn-copy-log');
             area.classList.toggle('show');
             this.textContent = area.classList.contains('show') ? '📋 日志 ▾' : '📋 日志 ▸';
+            if (copyBtn) copyBtn.style.display = area.classList.contains('show') ? 'inline' : 'none';
+        });
+
+        // 一键复制日志
+        document.getElementById('sca-btn-copy-log').addEventListener('click', () => {
+            const text = LOG_LINES.map(l => `[${l.time}] ${l.msg}`).join('\n');
+            navigator.clipboard.writeText(text).then(() => {
+                addLog('✅ 日志已复制到剪贴板', 'success');
+            }).catch(() => {
+                // fallback: 选中文本让用户手动复制
+                const area = document.getElementById('sca-log-area');
+                const range = document.createRange();
+                range.selectNodeContents(area);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+                addLog('请按 Ctrl+C 复制日志', 'info');
+            });
         });
 
         // 设置折叠
@@ -2279,16 +2301,19 @@
 
     /** 处理题目 */
     async function handleQuestions(questions) {
-        for (const q of questions) {
+        for (let qi = 0; qi < questions.length; qi++) {
+            const q = questions[qi];
             if (!STATE.isRunning || STATE.isPaused) break;
 
-            addLog(`题型: ${q.type === 'single' ? '单选' : q.type === 'multi' ? '多选' : q.type === 'judge' ? '判断' : '填空'}`, 'info');
+            // 截取题干前40字符作为标识
+            const qLabel = q.stem.replace(/\s+/g, ' ').trim().substring(0, 40);
+            addLog(`Q${qi+1}/${questions.length} [${q.type==='single'?'单选':q.type==='multi'?'多选':q.type==='judge'?'判断':'填空'}] ${qLabel}`, 'info');
 
             const result = await AIModule.search(q);
             if (result) {
                 const filled = STATE.adapter.fillAnswer(q, result.answer);
                 if (filled) {
-                    addLog(`答案已填入: ${result.answer} (来源:${result.source})`, 'success');
+                    addLog(`Q${qi+1} ✅ 已填入: ${result.answer} | 来源:${result.source} | ${qLabel}`, 'success');
 
                     // 自动提交
                     setTimeout(() => {
@@ -2324,7 +2349,7 @@
                     }, 500);
 
                 } else {
-                    addLog(`答案填入失败: ${result.answer}`, 'warn');
+                    addLog(`Q${qi+1} ❌ 填入失败: ${result.answer} | ${qLabel}`, 'warn');
                 }
             }
         }
