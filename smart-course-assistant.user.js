@@ -586,17 +586,48 @@
                 });
             }
 
-            // 诊断日志（输出到控制台）
+            // ── 去重：按题干相似度去重 ──
+            const deduped = [];
+            const seenStems = new Set();
+            questions.forEach(q => {
+                // 过滤明显的章节标题
+                const s = q.stem;
+                if (/^Part\s+[IVX]+\b/i.test(s) && q.options.length > 6) return; // "Part I Vocabulary..." 跳过
+                if (/^(Section|Unit|Chapter)\s+\d+/i.test(s)) return;
+                if (s.length < 10) return;
+
+                // 取题干前40个字符做去重key
+                const key = s.substring(0, 40).toLowerCase();
+                if (seenStems.has(key)) return;
+                seenStems.add(key);
+
+                // 选项数量异常的跳过（4-6个是正常范围，2-8也可接受）
+                if (q.options.length < 2 || q.options.length > 8) return;
+
+                deduped.push(q);
+            });
+
+            // 诊断日志
             console.log('[刷课助手|U校园] 题目检测诊断:', ...debugInfo);
-            console.log('[刷课助手|U校园] 最终找到题目数:', questions.length);
-            if (questions.length > 0) {
-                questions.forEach((q, i) => {
-                    console.log(`[刷课助手|U校园] 题目${i+1}: type=${q.type}, options=${q.options.length}, stem=${q.stem.substring(0,60)}...`);
-                    q.options.forEach(o => console.log(`  ${o.letter}. ${o.text.substring(0,40)}, el.tag=${o.element?.tagName}, el.class=${o.element?.className?.substring(0,40)}`));
-                });
+            console.log(`[刷课助手|U校园] 原始: ${questions.length} 道, 去重后: ${deduped.length} 道`);
+            deduped.forEach((q, i) => {
+                const optInfo = q.options.map(o =>
+                    `${o.letter}. tag=<${o.element?.tagName}> class="${(o.element?.className||'').substring(0,30)}" text="${o.text.substring(0,30)}"`
+                ).join(' | ');
+                console.log(`[刷课助手|U校园] Q${i+1}: type=${q.type} stem="${q.stem.substring(0,50)}..."`);
+                console.log(`  Options: ${optInfo}`);
+            });
+
+            // 同步输出到面板日志
+            if (deduped.length > 0) {
+                const sample = deduped[0];
+                const optSample = sample.options.map(o =>
+                    `${o.letter}.<${o.element?.tagName}>.${(o.element?.className||'').substring(0,20)}`
+                ).join(', ');
+                addLog(`U校园: 去重后${deduped.length}题, 示例[${sample.type}] el=${optSample}`, 'info');
             }
 
-            return questions;
+            return deduped;
         },
 
         _parseQuestion(container, forceType) {
