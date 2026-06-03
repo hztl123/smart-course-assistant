@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.8
+// @version      1.0.9
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
@@ -736,7 +736,6 @@
                     });
                 }
                 if (options.length >= 2) {
-                return { type, stem, options, container, raw: stem };
                     return { type, stem, options, container, raw: stem };
                 }
             }
@@ -758,7 +757,6 @@
                     options.push({ index: i, letter: String.fromCharCode(65 + i), text: item.text, element: item.el });
                 });
                 return { type, stem, options, container, raw: stem };
-                return { type, stem, options, container, raw: stem };
             }
 
             // --- 策略D: 自定义按钮/卡片选项 ---
@@ -775,7 +773,6 @@
                     }
                 });
                 if (options.length >= 2) {
-                return { type, stem, options, container, raw: stem };
                     return { type, stem, options, container, raw: stem };
                 }
             }
@@ -797,7 +794,6 @@
                 if (t) options.push({ index: 0, letter: 'A', text: '正确', element: t.element });
                 if (f) options.push({ index: 1, letter: 'B', text: '错误', element: f.element });
                 if (options.length >= 2) {
-                return { type, stem, options, container, raw: stem };
                     return { type, stem, options, container, raw: stem };
                 }
             }
@@ -805,7 +801,6 @@
             // --- 策略F: 填空 ---
             const textInputs = container.querySelectorAll('input[type="text"], input:not([type]), textarea, [contenteditable="true"]');
             if (textInputs.length > 0 && !forceType) {
-                return { type: 'fill', stem, options: [], container, raw: stem, inputs: Array.from(textInputs) };
                 return { type: 'fill', stem, options: [], container, raw: stem, inputs: Array.from(textInputs) };
             }
 
@@ -1044,6 +1039,14 @@
         /** 安全点击（尝试所有可能的点击目标） */
         _clickElement(el) {
             if (!el) return;
+            // 跳过已选中的选项（避免在批改/复习页面重复点击）
+            try {
+                const cls = (el.className || '').toString();
+                if (/\bselected\b/.test(cls)) {
+                    addLog('  → 选项已选中，跳过点击', 'info');
+                    return;
+                }
+            } catch (e) { /* ignore */ }
             try {
                 // 策略1: 点击内部的可交互子元素
                 const innerTargets = el.querySelectorAll('input, label, span, a, button, [class*="inner"], [class*="radio"], [class*="check"]');
@@ -1202,8 +1205,8 @@
     //  6. AI 搜题模块
     // ================================================================
     const AIModule = {
-        /** DeepSeek API 搜题 */
-        async searchViaAI(question) {
+        /** DeepSeek API 搜题（含 1 次空返回重试） */
+        async searchViaAI(question, retryCount = 0) {
             const apiKey = Config.get('ai.apiKey');
             const baseUrl = Config.get('ai.baseUrl');
             const model = Config.get('ai.model');
@@ -1227,31 +1230,52 @@
                     data: JSON.stringify({
                         model: model,
                         messages: [
-                            { role: 'system', content: '你是答题机器人。单选题只输出1个大写字母(如B)。多选题输出字母连写(如ABC)。判断题只输出"正确"或"错误"。填空题只输出答案文本。禁止输出空格、换行、解释、标点、或其他任何内容。' },
+                            { role: 'system', content: '你是答题机器人。严格按以下规则输出，不得输出任何其他内容：\n- 单选题：输出1个大写字母(A/B/C/D/E)\n- 多选题：输出字母连写(如ABC)\n- 判断题：输出"正确"或"错误"\n- 填空题：输出答案文本(多空用;分隔)' },
                             { role: 'user', content: prompt },
                         ],
                         temperature: 0.1,
-                        stop: ['\n\n'],
+                        // 不设 max_tokens：deepseek-chat 的推理 token 会吃掉输出 token，导致返回空
                     }),
-                    onload: function (resp) {
+                    onload: (resp) => {
                         try {
                             const res = JSON.parse(resp.responseText);
                             if (res.choices && res.choices[0]) {
                                 const msg = res.choices[0].message;
                                 // 优先取 content，其次取 reasoning_content（部分模型把答案放这里）
                                 const raw = (msg.content || msg.reasoning_content || '').trim();
-                                const answer = raw
-                                    .replace(/\s+/g, '')  // 去所有空白
-                                    .replace(/^(答案[是为：:]?)/i, '')
-                                    .replace(/^(正确选项[是为：:]?)/i, '')
-                                    .replace(/^(选)/i, '')
+                                // 清洗管道：去前缀 → 取首行 → 去空白 → 去标点结尾
+                                let answer = raw
+                                    .split(/\n|\r\n/)[0]           // 只取第一行
+                                    .replace(/^(答案[是为：:]\s*)/i, '')
+                                    .replace(/^(正确选项[是为：:]\s*)/i, '')
+                                    .replace(/^(选\s*)/i, '')
                                     .replace(/^["'`]|["'`]$/g, '')
-                                    .replace(/[,，。.]/g, '')
+                                    .replace(/[.,。，、]\s*$/, '')    // 去尾部标点
+                                    .replace(/\s+/g, '')              // 压缩空白
                                     .trim();
+                                // 结果中提取字母（处理 "B" / "正确答案是B" / "B A B D" 等）
+                                if (question.type === 'single' || question.type === 'multi') {
+                                    const letters = (answer.match(/[A-Ea-e]/g) || []).map(l => l.toUpperCase());
+                                    if (letters.length > 0) {
+                                        if (question.type === 'single') {
+                                            answer = letters[0];  // 单选只取首字母
+                                        } else {
+                                            answer = [...new Set(letters)].sort().join('');  // 多选去重排序
+                                        }
+                                    }
+                                }
                                 // 诊断
                                 if (!answer) {
                                     const usage = res.usage ? ` in=${res.usage.prompt_tokens} out=${res.usage.completion_tokens}` : '';
-                                    addLog(`AI空: finish=${res.choices[0].finish_reason}${usage} content="${(msg.content||'').substring(0,50)}" reason="${(msg.reasoning_content||'').substring(0,50)}"`, 'warn');
+                                    addLog(`AI空: finish=${res.choices[0].finish_reason}${usage} content="${(msg.content||'').substring(0,60)}" reason="${(msg.reasoning_content||'').substring(0,60)}"`, 'warn');
+                                    // 空返回且未重试 → 重试一次（换一个随机种子）
+                                    if (retryCount < 1) {
+                                        addLog('  → AI 返回空，1秒后重试...', 'warn');
+                                        setTimeout(() => {
+                                            this.searchViaAI(question, retryCount + 1).then(resolve);
+                                        }, 1000);
+                                        return;
+                                    }
                                 }
                                 resolve({ answer, confidence: answer ? 0.85 : 0, source: 'AI' });
                             } else {
@@ -1451,15 +1475,16 @@
             const cfg = Config.get('antiStall');
             const target = STATE.targetSpeed;
 
+            const minSpeed = Config.get('minSpeed');
             if (isStall) {
                 // 卡顿时大幅降速
-                STATE.currentSpeed = Math.max(cfg.minSpeed, video.playbackRate / 4);
+                STATE.currentSpeed = Math.max(minSpeed, video.playbackRate / 4);
             } else if (bufferAhead < cfg.minBuffer) {
                 // 缓冲严重不足
-                STATE.currentSpeed = Math.max(cfg.minSpeed, video.playbackRate - cfg.speedDownStep * 2);
+                STATE.currentSpeed = Math.max(minSpeed, video.playbackRate - cfg.speedDownStep * 2);
             } else if (bufferAhead < cfg.lowBuffer) {
                 // 缓冲偏低
-                STATE.currentSpeed = Math.max(cfg.minSpeed, video.playbackRate - cfg.speedDownStep);
+                STATE.currentSpeed = Math.max(minSpeed, video.playbackRate - cfg.speedDownStep);
             } else if (bufferAhead > cfg.highBuffer) {
                 // 缓冲充足，逐步回升到目标倍速
                 STATE.currentSpeed = Math.min(target, video.playbackRate + cfg.speedUpStep);
@@ -2359,60 +2384,86 @@
     /** 处理题目 */
     async function handleQuestions(questions) {
         for (let qi = 0; qi < questions.length; qi++) {
-            const q = questions[qi];
             if (!STATE.isRunning || STATE.isPaused) break;
 
-            // 截取题干前40字符作为标识
-            const qLabel = q.stem.replace(/\s+/g, ' ').trim().substring(0, 40);
-            addLog(`Q${qi+1}/${questions.length} [${q.type==='single'?'单选':q.type==='multi'?'多选':q.type==='judge'?'判断':'填空'}] ${qLabel}`, 'info');
-            const titleEl = document.getElementById('sca-title');
-            if (titleEl) titleEl.textContent = `AI思考中: ${qLabel}...`;
+            try {
+                const q = questions[qi];
+                // 截取题干前40字符作为标识
+                const qLabel = q.stem.replace(/\s+/g, ' ').trim().substring(0, 40);
+                addLog(`Q${qi+1}/${questions.length} [${q.type==='single'?'单选':q.type==='multi'?'多选':q.type==='judge'?'判断':'填空'}] ${qLabel}`, 'info');
+                const titleEl = document.getElementById('sca-title');
+                if (titleEl) titleEl.textContent = `AI思考中: ${qLabel}...`;
 
-            const result = await AIModule.search(q);
-            if (result) {
-                const filled = STATE.adapter.fillAnswer(q, result.answer);
+                const result = await AIModule.search(q);
+                if (!result) continue;
+
+                // ── 重新检测当前 DOM 中的题目，获取新鲜的元素引用 ──
+                //     U校园每答一题可能局部刷新 DOM，旧引用会变成 detached 节点
+                let freshQ = q; // 默认用原来的
+                try {
+                    const freshQuestions = STATE.adapter.detectQuestions();
+                    if (freshQuestions.length > 0) {
+                        // 按题干前 40 字符匹配（忽略空白差异）
+                        const qKey = q.stem.replace(/\s+/g, '').substring(0, 30).toLowerCase();
+                        const match = freshQuestions.find(fq =>
+                            fq.stem.replace(/\s+/g, '').substring(0, 30).toLowerCase() === qKey
+                        );
+                        if (match) {
+                            freshQ = match;
+                            addLog(`  → DOM 已刷新，选项数=${freshQ.options.length}`, 'info');
+                        }
+                    }
+                } catch (e) {
+                    addLog(`  → DOM 刷新失败，使用原始引用: ${e.message}`, 'warn');
+                }
+
+                const filled = STATE.adapter.fillAnswer(freshQ, result.answer);
                 if (filled) {
                     STATE.completed++;
                     STATE.remaining = Math.max(0, STATE.remaining - 1);
                     updatePanel();
                     addLog(`Q${qi+1} ✅ 已填入: ${result.answer} | 来源:${result.source} | ${qLabel}`, 'success');
 
-                    // 自动提交
+                    // U校园通常自动保存，不强制找提交按钮
+                    // 仅在有明确提交按钮时尝试点击
                     setTimeout(() => {
-                        let clicked = false;
-                        // 先尝试常见选择器
-                        const submitSelectors = [
-                            'button.submit', '.submit-btn', '#submitBtn',
-                            'button[type="submit"]', '.btn-submit', '.btn_submit',
-                            '.ant-btn-primary', '.el-button--primary',
-                        ];
-                        for (const sel of submitSelectors) {
-                            const btn = document.querySelector(sel);
-                            if (btn && btn.offsetParent !== null) {
-                                const text = (btn.textContent || '').trim();
-                                if (/提交|确认|确定/.test(text)) {
-                                    try { btn.click(); addLog('已点击提交', 'info'); clicked = true; } catch (e) { }
-                                    break;
+                        try {
+                            let clicked = false;
+                            const submitSelectors = [
+                                'button.submit', '.submit-btn', '#submitBtn',
+                                'button[type="submit"]', '.btn-submit', '.btn_submit',
+                                '.ant-btn-primary', '.el-button--primary',
+                            ];
+                            for (const sel of submitSelectors) {
+                                const btn = document.querySelector(sel);
+                                if (btn && btn.offsetParent !== null) {
+                                    const text = (btn.textContent || '').trim();
+                                    if (/提交|确认|确定/.test(text)) {
+                                        try { btn.click(); addLog('已点击提交', 'info'); clicked = true; } catch (e) { }
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        // 文本匹配兜底
-                        if (!clicked) {
-                            const allBtns = document.querySelectorAll('button, .btn, a.btn, [role="button"]');
-                            for (const btn of allBtns) {
-                                if (btn.offsetParent === null) continue;
-                                const text = (btn.textContent || btn.innerText || '').trim();
-                                if (/^提交$|^确认$|^确定$|提交答案|确认提交/.test(text)) {
-                                    try { btn.click(); addLog('已点击提交', 'info'); } catch (e) { }
-                                    break;
+                            if (!clicked) {
+                                const allBtns = document.querySelectorAll('button, .btn, a.btn, [role="button"]');
+                                for (const btn of allBtns) {
+                                    if (btn.offsetParent === null) continue;
+                                    const text = (btn.textContent || btn.innerText || '').trim();
+                                    if (/^提交$|^确认$|^确定$|提交答案|确认提交/.test(text)) {
+                                        try { btn.click(); addLog('已点击提交', 'info'); } catch (e) { }
+                                        break;
+                                    }
                                 }
                             }
-                        }
+                        } catch (e) { /* 提交非关键，忽略异常 */ }
                     }, 500);
 
                 } else {
                     addLog(`Q${qi+1} ❌ 填入失败: ${result.answer} | ${qLabel}`, 'warn');
                 }
+            } catch (e) {
+                addLog(`Q${qi+1} 💥 异常: ${e.message}，继续下一题`, 'error');
+                // 单题失败不阻断后续
             }
         }
     }
