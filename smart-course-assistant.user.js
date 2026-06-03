@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.2
+// @version      1.0.3
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
@@ -1229,24 +1229,26 @@
                             { role: 'user', content: prompt },
                         ],
                         temperature: 0.1,
-                        max_tokens: 512,
                         stop: ['\n\n'],
                     }),
                     onload: function (resp) {
                         try {
                             const res = JSON.parse(resp.responseText);
                             if (res.choices && res.choices[0]) {
-                                const raw = (res.choices[0].message.content || '').trim();
+                                const msg = res.choices[0].message;
+                                // 优先取 content，其次取 reasoning_content（部分模型把答案放这里）
+                                const raw = (msg.content || msg.reasoning_content || '').trim();
                                 const answer = raw
                                     .replace(/^(答案[是为：:]?\s*)/i, '')
                                     .replace(/^(正确选项[是为：:]?\s*)/i, '')
                                     .replace(/^(选\s*)/i, '')
                                     .replace(/^["'`]|["'`]$/g, '')
+                                    .replace(/[\s\n\r]+/g, ' ')
                                     .trim();
-                                // 诊断：记录原始返回
+                                // 诊断
                                 if (!answer) {
-                                    const usage = res.usage ? ` prompt_tokens=${res.usage.prompt_tokens} completion_tokens=${res.usage.completion_tokens}` : '';
-                                    addLog(`AI返回空: finish=${res.choices[0].finish_reason}${usage} raw="${raw.substring(0,80)}"`, 'warn');
+                                    const usage = res.usage ? ` in=${res.usage.prompt_tokens} out=${res.usage.completion_tokens}` : '';
+                                    addLog(`AI空: finish=${res.choices[0].finish_reason}${usage} content="${(msg.content||'').substring(0,50)}" reason="${(msg.reasoning_content||'').substring(0,50)}"`, 'warn');
                                 }
                                 resolve({ answer, confidence: answer ? 0.85 : 0, source: 'AI' });
                             } else {
