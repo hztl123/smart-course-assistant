@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.1
+// @version      1.0.2
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
