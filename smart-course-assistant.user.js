@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.7
+// @version      1.0.8
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
@@ -1045,14 +1045,6 @@
         _clickElement(el) {
             if (!el) return;
             try {
-                const origEl = el;
-
-                // 策略0: 跳过已选中的选项（复习/批改模式）
-                const cls = (el.className || '').toString();
-                if (/\bselected\b/.test(cls)) {
-                    addLog('  → 选项已选中(复习模式)，跳过点击', 'info');
-                }
-
                 // 策略1: 点击内部的可交互子元素
                 const innerTargets = el.querySelectorAll('input, label, span, a, button, [class*="inner"], [class*="radio"], [class*="check"]');
                 for (const t of innerTargets) {
@@ -1249,11 +1241,12 @@
                                 // 优先取 content，其次取 reasoning_content（部分模型把答案放这里）
                                 const raw = (msg.content || msg.reasoning_content || '').trim();
                                 const answer = raw
-                                    .replace(/^(答案[是为：:]?\s*)/i, '')
-                                    .replace(/^(正确选项[是为：:]?\s*)/i, '')
-                                    .replace(/^(选\s*)/i, '')
+                                    .replace(/\s+/g, '')  // 去所有空白
+                                    .replace(/^(答案[是为：:]?)/i, '')
+                                    .replace(/^(正确选项[是为：:]?)/i, '')
+                                    .replace(/^(选)/i, '')
                                     .replace(/^["'`]|["'`]$/g, '')
-                                    .replace(/[\s\n\r]+/g, ' ')
+                                    .replace(/[,，。.]/g, '')
                                     .trim();
                                 // 诊断
                                 if (!answer) {
@@ -1281,11 +1274,11 @@
             switch (question.type) {
                 case 'single':
                     prompt = `请回答以下单选题，只输出正确答案的字母（如 A）。\n题目：${question.stem}\n`;
-                    question.options.forEach(o => { prompt += `${o.letter}. ${o.text}\n`; });
+                    question.options.forEach(o => { prompt += `${o.letter}. ${o.text.substring(0, 80)}\n`; });
                     break;
                 case 'multi':
                     prompt = `请回答以下多选题，只输出所有正确答案的字母（如 ABC）。\n题目：${question.stem}\n`;
-                    question.options.forEach(o => { prompt += `${o.letter}. ${o.text}\n`; });
+                    question.options.forEach(o => { prompt += `${o.letter}. ${o.text.substring(0, 80)}\n`; });
                     break;
                 case 'judge':
                     prompt = `请判断以下说法是否正确，只输出"正确"或"错误"。\n${question.stem}`;
@@ -1296,7 +1289,7 @@
                 default:
                     prompt = `请回答以下题目：\n${question.stem}`;
                     if (question.options.length > 0) {
-                        question.options.forEach(o => { prompt += `${o.letter}. ${o.text}\n`; });
+                        question.options.forEach(o => { prompt += `${o.letter}. ${o.text.substring(0, 80)}\n`; });
                     }
             }
             return prompt;
@@ -2372,7 +2365,8 @@
             // 截取题干前40字符作为标识
             const qLabel = q.stem.replace(/\s+/g, ' ').trim().substring(0, 40);
             addLog(`Q${qi+1}/${questions.length} [${q.type==='single'?'单选':q.type==='multi'?'多选':q.type==='judge'?'判断':'填空'}] ${qLabel}`, 'info');
-            document.getElementById('sca-title').textContent = `AI思考中: ${qLabel}...`;
+            const titleEl = document.getElementById('sca-title');
+            if (titleEl) titleEl.textContent = `AI思考中: ${qLabel}...`;
 
             const result = await AIModule.search(q);
             if (result) {
