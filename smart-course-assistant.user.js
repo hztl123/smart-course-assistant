@@ -592,8 +592,8 @@
             const skipped = { part: 0, short: 0, dup: 0, opts: 0, review: 0 };
             questions.forEach(q => {
                 const s = q.stem;
-                if (/^(Part|Section|Unit|Chapter)\s+[IVXⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ\d]+\b/i.test(s)) { skipped.part++; return; }
-                if (/^(Directions|Instructions|Listening|Reading|Writing|Translation)\b/i.test(s)) { skipped.part++; return; }
+                if (/^(Part|Section|Unit|Chapter)\s+[IVXⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ\d]+/i.test(s)) { skipped.part++; return; }
+                if (/^(Directions|Instructions|Listening|Reading|Writing|Translation)/i.test(s)) { skipped.part++; return; }
                 if (s.length < 10) { skipped.short++; return; }
                 const key = s.substring(0, 40).toLowerCase();
                 if (seenStems.has(key)) { skipped.dup++; return; }
@@ -714,7 +714,8 @@
                 const largest = Object.values(byClass).sort((a, b) => b.length - a.length)[0];
                 if (largest && largest.length >= 2 && largest.length <= 6) {
                     type = type || 'single';
-                    largest.forEach((el, i) => {
+                    const sortedLargest = this._sortByVisualOrder(largest);
+                    sortedLargest.forEach((el, i) => {
                         const text = (el.textContent || el.innerText || '').replace(/\s+/g, ' ').trim();
                         if (text && text.length > 0) {
                             options.push({ index: i, letter: String.fromCharCode(65 + i), text, element: el });
@@ -752,7 +753,9 @@
             const candidateGroups = this._findOptionGroups(container);
             if (candidateGroups.length >= 2) {
                 type = type || 'single';
-                candidateGroups.forEach((el, i) => {
+                // 按视觉位置排序（上→下，左→右）
+                const sorted = this._sortByVisualOrder(candidateGroups);
+                sorted.forEach((el, i) => {
                     const text = (el.textContent || el.innerText || '').replace(/\s+/g, ' ').trim();
                     if (text && text.length > 0) {
                         options.push({ index: i, letter: String.fromCharCode(65 + i), text, element: el });
@@ -1009,6 +1012,17 @@
             return true;
         },
 
+        /** 按视觉位置排序（上→下，左→右） */
+        _sortByVisualOrder(elements) {
+            return Array.from(elements).sort((a, b) => {
+                const ra = a.getBoundingClientRect();
+                const rb = b.getBoundingClientRect();
+                const dy = ra.top - rb.top;
+                if (Math.abs(dy) > 10) return dy;  // 不同行：按上到下
+                return ra.left - rb.left;            // 同行：按左到右
+            });
+        },
+
         /** 安全点击（尝试所有可能的点击目标） */
         _clickElement(el) {
             if (!el) return;
@@ -1207,7 +1221,8 @@
                             { role: 'user', content: prompt },
                         ],
                         temperature: 0.1,
-                        max_tokens: 100,
+                        max_tokens: 256,
+                        stop: ['\n\n', '解释', '答案'],
                     }),
                     onload: function (resp) {
                         try {
@@ -1222,7 +1237,8 @@
                                     .trim();
                                 // 诊断：记录原始返回
                                 if (!answer) {
-                                    addLog(`AI返回空内容: raw="${raw.substring(0,50)}" finish_reason=${res.choices[0].finish_reason}`, 'warn');
+                                    const usage = res.usage ? ` prompt_tokens=${res.usage.prompt_tokens} completion_tokens=${res.usage.completion_tokens}` : '';
+                                    addLog(`AI返回空: finish=${res.choices[0].finish_reason}${usage} raw="${raw.substring(0,80)}"`, 'warn');
                                 }
                                 resolve({ answer, confidence: answer ? 0.85 : 0, source: 'AI' });
                             } else {
