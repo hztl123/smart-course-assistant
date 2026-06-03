@@ -538,32 +538,62 @@
             return null;
         },
 
-        // ---- 题目检测（U校园题型更复杂） ----
+        // ---- 题目检测（U校园） ----
         detectQuestions() {
             const questions = [];
-
-            // U校园题目容器（比超星更宽松的匹配）
-            const qContainers = document.querySelectorAll(
-                '.question-wrapper, .question-item, [class*="question"], ' +
-                '.ant-form-item, .exam-item, .topic-item, .test-item, ' +
-                '[class*="topic"], [class*="exam"], [class*="test"], ' +
-                '.single-choose, .multi-choose, .judge-item, .fill-item'
-            );
-
             const seen = new Set();
-            qContainers.forEach(container => {
+            let debugInfo = [];
+
+            // ── 步骤1: 容器级检测 ──
+            const containerSels = [
+                '.question-wrapper', '.question-item', '[class*="question"]',
+                '.exam-item', '.topic-item', '.test-item',
+                '[class*="topic"]', '[class*="exam"]', '.ant-form-item',
+                '.single-choose', '.multi-choose', '.judge-item', '.fill-item',
+            ];
+            const containers = document.querySelectorAll(containerSels.join(','));
+            debugInfo.push(`容器检测: ${containers.length} 个候选容器`);
+
+            containers.forEach(container => {
                 if (seen.has(container)) return;
                 const q = this._parseQuestion(container);
-                if (q) {
+                if (q && q.options.length >= 2) {
                     questions.push(q);
                     seen.add(container);
                 }
             });
 
-            // 如果没找到任何题目容器，直接在全局搜索选项元素
+            // ── 步骤2: 如果容器级没找到，直接在 body 级搜索选项组 ──
             if (questions.length === 0) {
+                debugInfo.push('容器级未找到题目，尝试全局搜索...');
                 const q = this._parseQuestion(document.body);
-                if (q) questions.push(q);
+                if (q && q.options.length >= 2) {
+                    questions.push(q);
+                }
+            }
+
+            // ── 步骤3: 全局搜索 —— 找页面上所有"看起来像选项组"的元素群 ──
+            if (questions.length === 0) {
+                debugInfo.push('尝试泛化选项组检测...');
+                const groups = this._findAllOptionGroupsOnPage();
+                debugInfo.push(`泛化检测找到 ${groups.length} 个选项组`);
+                groups.forEach(group => {
+                    const q = this._buildQuestionFromGroup(group);
+                    if (q && q.options.length >= 2 && !seen.has(q.container)) {
+                        questions.push(q);
+                        seen.add(q.container);
+                    }
+                });
+            }
+
+            // 诊断日志（输出到控制台）
+            console.log('[刷课助手|U校园] 题目检测诊断:', ...debugInfo);
+            console.log('[刷课助手|U校园] 最终找到题目数:', questions.length);
+            if (questions.length > 0) {
+                questions.forEach((q, i) => {
+                    console.log(`[刷课助手|U校园] 题目${i+1}: type=${q.type}, options=${q.options.length}, stem=${q.stem.substring(0,60)}...`);
+                    q.options.forEach(o => console.log(`  ${o.letter}. ${o.text.substring(0,40)}, el.tag=${o.element?.tagName}, el.class=${o.element?.className?.substring(0,40)}`));
+                });
             }
 
             return questions;
@@ -572,184 +602,250 @@
         _parseQuestion(container, forceType) {
             if (!container) return null;
 
-            // 提取题干
+            // --- 提取题干 ---
             let stem = '';
-            const stemEl = container.querySelector(
-                '.question-stem, .stem, .q-title, h3, h4, ' +
-                '[class*="stem"], [class*="title"], .topic-title, ' +
-                '.question-name, .exam-title, .test-name'
-            );
+            const stemSel = '.question-stem, .stem, .q-title, h3, h4, [class*="stem"], [class*="title"], .topic-title, .question-name, .exam-title';
+            const stemEl = container.querySelector(stemSel);
             if (stemEl) {
                 stem = (stemEl.textContent || stemEl.innerText || '').replace(/\s+/g, ' ').trim();
-            } else {
-                // 从容器文本中去掉选项文本得到题干
+            }
+            if (!stem || stem.length < 2) {
                 const text = (container.textContent || '').replace(/\s+/g, ' ').trim();
                 stem = text.substring(0, 300);
             }
             if (!stem || stem.length < 2) return null;
 
-            const options = [];
             let type = forceType;
+            const options = [];
 
-            // ── 策略1: 标准 form input（优先级最高） ──
-            const allInputs = container.querySelectorAll('input');
-            const radios = []; const checks = [];
-            allInputs.forEach(inp => {
-                if (inp.type === 'radio') radios.push(inp);
-                if (inp.type === 'checkbox') checks.push(inp);
+            // --- 策略A: 所有 input[type=radio/checkbox] ---
+            const allInputs = Array.from(container.querySelectorAll('input'));
+            const radios = allInputs.filter(inp => inp.type === 'radio' || inp.classList.contains('ant-radio-input'));
+            const checks = allInputs.filter(inp => inp.type === 'checkbox' || inp.classList.contains('ant-checkbox-input'));
+
+            const collectOptions = (elements, optType) => {
+                elements.forEach((el, i) => {
+                    // 爬到包含选项文字的最近父元素
+                    let target = el;
+                    for (let j = 0; j < 5; j++) {
+                        const t = (target.textContent || target.innerText || '').replace(/\s+/g, ' ').trim();
+                        if (t.length > el.textContent?.length * 0.7) break;
+                        target = target.parentElement;
+                        if (!target) { target = el; break; }
+                    }
+                    const text = (target.textContent || target.innerText || '').replace(/\s+/g, ' ').trim();
+                    if (text && text.length > 0) {
+                        options.push({ index: i, letter: String.fromCharCode(65 + i), text, element: target });
+                    }
+                });
+            };
+
+            if (radios.length >= 2) { type = type || 'single'; collectOptions(radios); }
+            if (checks.length >= 2) { type = type || 'multi'; collectOptions(checks); }
+            if (options.length >= 2) {
+                addLog(`U校园解析(input): type=${type}, n=${options.length}`, 'info');
+                return { type, stem, options, container, raw: stem };
+            }
+
+            // --- 策略B: Ant Design 包装器 ---
+            const antRadios = Array.from(container.querySelectorAll('.ant-radio-wrapper, .ant-radio'));
+            const antChecks = Array.from(container.querySelectorAll('.ant-checkbox-wrapper, .ant-checkbox'));
+            options.length = 0;
+            if (antRadios.length >= 2) { type = type || 'single'; collectOptions(antRadios); }
+            if (antChecks.length >= 2 && options.length === 0) { type = type || 'multi'; collectOptions(antChecks); }
+            if (options.length >= 2) {
+                addLog(`U校园解析(Ant): type=${type}, n=${options.length}`, 'info');
+                return { type, stem, options, container, raw: stem };
+            }
+
+            // --- 策略C: 文字模式 —— 找 A. B. C. D. 或 ①②③④ 开头的元素 ---
+            options.length = 0;
+            const letterPattern = container.querySelectorAll('[class*="option"], [class*="choice"], [class*="answer-"], li, .item, [data-index], [data-option]');
+            const letterOptions = [];
+            letterPattern.forEach(el => {
+                const text = (el.textContent || el.innerText || '').replace(/\s+/g, ' ').trim();
+                // 检查是否以 A. / B. / 1. / ① 等开头
+                if (/^[A-Da-d][.\s、:：)]/.test(text) || /^[1-4][.\s、:：)]/.test(text)) {
+                    letterOptions.push({ el, text });
+                }
             });
-            // Ant Design
-            container.querySelectorAll('.ant-radio-input').forEach(el => { if (!radios.includes(el)) radios.push(el); });
-            container.querySelectorAll('.ant-checkbox-input').forEach(el => { if (!checks.includes(el)) checks.push(el); });
-
-            if (radios.length > 0 || checks.length > 0) {
-                if (!type) type = (checks.length > 0 && radios.length === 0) ? 'multi' : 'single';
-                const elements = type === 'multi' ? checks : radios;
-                elements.forEach((el, i) => {
-                    const wrapper = el.closest('.ant-radio-wrapper, .ant-checkbox-wrapper, label, .option-item') || el.parentElement;
-                    const text = (wrapper.textContent || wrapper.innerText || '').replace(/\s+/g, ' ').trim();
-                    if (text && text.length > 0) {
-                        // 存储可点击的目标：优先用 wrapper（Ant Design 需要点 wrapper）
-                        options.push({
-                            index: i, letter: String.fromCharCode(65 + i), text,
-                            element: wrapper,  // ← 关键：存 wrapper 而不是 input
-                        });
-                    }
+            if (letterOptions.length >= 2 && letterOptions.length <= 10) {
+                type = type || 'single';
+                letterOptions.forEach((item, i) => {
+                    options.push({ index: i, letter: String.fromCharCode(65 + i), text: item.text, element: item.el });
                 });
-                if (options.length > 0) {
-                    addLog(`U校园题目解析: type=${type}, options=${options.length}`, 'info');
-                    return { type, stem, options, container, raw: stem };
-                }
+                addLog(`U校园解析(文字模式): type=${type}, n=${options.length}`, 'info');
+                return { type, stem, options, container, raw: stem };
             }
 
-            // ── 策略2: Ant Design 的 .ant-radio / .ant-checkbox 包装器（无标准 input 的情况） ──
-            const antRadios = container.querySelectorAll('.ant-radio-wrapper, .ant-radio');
-            const antChecks = container.querySelectorAll('.ant-checkbox-wrapper, .ant-checkbox');
-
-            if (antRadios.length > 0 || antChecks.length > 0) {
-                if (!type) type = (antChecks.length > 0 && antRadios.length === 0) ? 'multi' : 'single';
-                const elements = type === 'multi' ? antChecks : antRadios;
-                elements.forEach((el, i) => {
-                    const wrapper = el.classList.contains('ant-radio-wrapper') || el.classList.contains('ant-checkbox-wrapper')
-                        ? el : el.closest('.ant-radio-wrapper, .ant-checkbox-wrapper') || el;
-                    const text = (wrapper.textContent || wrapper.innerText || '').replace(/\s+/g, ' ').trim();
-                    if (text && text.length > 0) {
-                        options.push({
-                            index: i, letter: String.fromCharCode(65 + i), text,
-                            element: wrapper,
-                        });
-                    }
-                });
-                if (options.length > 0) {
-                    addLog(`U校园题目解析(Ant): type=${type}, options=${options.length}`, 'info');
-                    return { type, stem, options, container, raw: stem };
-                }
-            }
-
-            // ── 策略3: 泛化检测 —— 找容器内相似的可点击子元素 ──
-            // 寻找 class 名相似的兄弟元素组（常见于自定义选项）
+            // --- 策略D: 自定义按钮/卡片选项 ---
+            options.length = 0;
             const candidateGroups = this._findOptionGroups(container);
             if (candidateGroups.length >= 2) {
-                if (!type) type = 'single';
+                type = type || 'single';
                 candidateGroups.forEach((el, i) => {
                     const text = (el.textContent || el.innerText || '').replace(/\s+/g, ' ').trim();
                     if (text && text.length > 0) {
-                        options.push({
-                            index: i, letter: String.fromCharCode(65 + i), text,
-                            element: el,
-                        });
+                        options.push({ index: i, letter: String.fromCharCode(65 + i), text, element: el });
                     }
                 });
                 if (options.length >= 2) {
-                    addLog(`U校园题目解析(泛化): type=${type}, options=${options.length}`, 'info');
+                    addLog(`U校园解析(泛化): type=${type}, n=${options.length}`, 'info');
                     return { type, stem, options, container, raw: stem };
                 }
             }
 
-            // ── 策略4: 判断题 ──
-            const judgeBtns = container.querySelectorAll(
-                'button, .btn, a, span[role="button"], ' +
-                '[class*="true"], [class*="false"], [class*="right"], [class*="wrong"]'
-            );
-            const judgeTexts = [];
-            judgeBtns.forEach(btn => {
+            // --- 策略E: 判断题 ---
+            options.length = 0;
+            const allBtns = container.querySelectorAll('button, .btn, a, span[role="button"], [class*="true"], [class*="false"]');
+            const judgeItems = [];
+            allBtns.forEach(btn => {
                 const t = (btn.textContent || '').trim();
-                if (/正确|错误|对|错|是|否|√|×|true|false|yes|no/i.test(t) && t.length <= 10) {
-                    judgeTexts.push({ element: btn, text: t });
+                if (/^(正确|错误|对|错|是|否|√|×|true|false|yes|no)$/i.test(t)) {
+                    judgeItems.push({ element: btn, text: t });
                 }
             });
-            if (judgeTexts.length >= 2) {
+            if (judgeItems.length >= 2) {
                 type = 'judge';
-                const trueOpt = judgeTexts.find(t => /正确|对|是|√|true|yes/i.test(t.text));
-                const falseOpt = judgeTexts.find(t => /错误|错|否|×|false|no/i.test(t.text));
-                if (trueOpt) options.push({ index: 0, letter: 'A', text: '正确', element: trueOpt.element });
-                if (falseOpt) options.push({ index: 1, letter: 'B', text: '错误', element: falseOpt.element });
+                const t = judgeItems.find(j => /正确|对|是|√|true|yes/i.test(j.text));
+                const f = judgeItems.find(j => /错误|错|否|×|false|no/i.test(j.text));
+                if (t) options.push({ index: 0, letter: 'A', text: '正确', element: t.element });
+                if (f) options.push({ index: 1, letter: 'B', text: '错误', element: f.element });
                 if (options.length >= 2) {
-                    addLog(`U校园题目解析(判断): options=${options.length}`, 'info');
+                    addLog(`U校园解析(判断): n=${options.length}`, 'info');
                     return { type, stem, options, container, raw: stem };
                 }
             }
 
-            // ── 策略5: 填空题 ──
+            // --- 策略F: 填空 ---
             const textInputs = container.querySelectorAll('input[type="text"], input:not([type]), textarea, [contenteditable="true"]');
             if (textInputs.length > 0 && !forceType) {
-                type = 'fill';
-                addLog(`U校园题目解析(填空): inputs=${textInputs.length}`, 'info');
-                return { type, stem, options: [], container, raw: stem,
-                    inputs: Array.from(textInputs) };
+                addLog(`U校园解析(填空): inputs=${textInputs.length}`, 'info');
+                return { type: 'fill', stem, options: [], container, raw: stem, inputs: Array.from(textInputs) };
             }
 
-            // 什么都没找到
             return null;
+        },
+
+        /** 从选项组构建题目对象 */
+        _buildQuestionFromGroup(group) {
+            if (!group || group.length < 2) return null;
+            const container = group[0].closest('div, section, form, body') || document.body;
+            const text = (container.textContent || '').replace(/\s+/g, ' ').trim();
+            const stem = text.substring(0, 300);
+            const options = group.map((el, i) => ({
+                index: i,
+                letter: String.fromCharCode(65 + i),
+                text: (el.textContent || el.innerText || '').replace(/\s+/g, ' ').trim(),
+                element: el,
+            }));
+            return { type: 'single', stem, options, container, raw: stem };
+        },
+
+        /** 全页面扫描：找所有相似的选项组 */
+        _findAllOptionGroupsOnPage() {
+            const groups = [];
+
+            // 策略: 找父元素下有≥2个 class 名相同或相似的可点击子元素
+            const parents = document.querySelectorAll('div, ul, ol, section, fieldset, form');
+            const seenEls = new Set();
+
+            parents.forEach(parent => {
+                if (groups.length >= 5) return; // 最多5组
+
+                // 找直接子元素中有 cursor:pointer 且数量 2-8 的
+                const children = Array.from(parent.children).filter(child => {
+                    if (seenEls.has(child)) return false;
+                    try {
+                        const style = window.getComputedStyle(child);
+                        return style.cursor === 'pointer' && child.offsetParent !== null;
+                    } catch (e) { return false; }
+                });
+
+                if (children.length >= 2 && children.length <= 8) {
+                    // 检查是否包含字母前缀文本（A. B. C. D.）
+                    const letterCount = children.filter(c =>
+                        /^[A-Da-d][.\s、:：)]/.test((c.textContent || '').trim())
+                    ).length;
+                    if (letterCount >= 2) {
+                        children.forEach(c => seenEls.add(c));
+                        groups.push(children);
+                    }
+                }
+
+                // 也检查通过 class 匹配的子元素
+                if (children.length < 2) {
+                    const classGroups = {};
+                    Array.from(parent.children).forEach(child => {
+                        if (seenEls.has(child)) return;
+                        const cls = child.className?.toString()?.split(' ').find(c => c.length > 3);
+                        if (cls) {
+                            if (!classGroups[cls]) classGroups[cls] = [];
+                            classGroups[cls].push(child);
+                        }
+                    });
+                    Object.values(classGroups).forEach(g => {
+                        if (g.length >= 2 && g.length <= 8 && groups.length < 5) {
+                            g.forEach(c => seenEls.add(c));
+                            groups.push(g);
+                        }
+                    });
+                }
+            });
+
+            return groups;
         },
 
         /** 寻找容器内相似的可点击子元素组 */
         _findOptionGroups(container) {
-            // 尝试找有规律类名的元素组 (.option-item, .choice-item 等)
             const patterns = ['.option-item', '.choice-item', '.answer-item', '.opt-item',
-                '[class*="option"]', '[class*="choice"]', '[class*="answer-item"]',
-                'li[data-option]', 'li[data-index]', '.select-item'];
+                '[class*="option"]', '[class*="choice"]', '[class*="answer-item"]', '[class*="select-item"]'];
             for (const pat of patterns) {
-                const els = container.querySelectorAll(pat);
-                if (els.length >= 2 && els.length <= 10) return Array.from(els);
+                try {
+                    const els = container.querySelectorAll(pat);
+                    if (els.length >= 2 && els.length <= 10) return Array.from(els);
+                } catch (e) { }
             }
 
-            // 找有 click 事件的元素或 cursor:pointer 的元素
+            // cursor:pointer 的子元素
             const clickables = [];
             const all = container.querySelectorAll('div, span, li, label, button, a');
             all.forEach(el => {
                 if (clickables.length > 10) return;
-                const style = window.getComputedStyle(el);
-                if (style.cursor === 'pointer' && el.offsetParent !== null) {
-                    const text = (el.textContent || '').trim();
-                    // 排除太短或太长的（不是选项）
-                    if (text.length > 1 && text.length < 200) {
-                        // 检查是否是同层级的相似元素
-                        const parent = el.parentElement;
-                        if (parent) {
-                            const classes = el.className.split(' ').filter(c => c);
-                            const selector = classes.length > 0
-                                ? el.tagName + '.' + classes.join('.')
-                                : el.tagName;
-                            try {
-                                const siblings = parent.querySelectorAll(selector);
-                                if (siblings.length >= 2 && siblings.length <= 10) {
-                                    clickables.push(...siblings);
-                                }
-                            } catch (e) { /* 选择器无效则跳过 */ }
-                        }
+                try {
+                    const style = window.getComputedStyle(el);
+                    if (style.cursor === 'pointer' && el.offsetParent !== null) {
+                        const text = (el.textContent || '').trim();
+                        if (text.length > 1 && text.length < 200) clickables.push(el);
                     }
-                }
+                } catch (e) { }
             });
 
-            // 去重
-            return [...new Set(clickables)].slice(0, 10);
+            if (clickables.length >= 2 && clickables.length <= 10) return clickables;
+
+            // 找兄弟元素组
+            if (clickables.length > 10) {
+                const byParent = {};
+                clickables.forEach(el => {
+                    const p = el.parentElement;
+                    if (!p) return;
+                    const key = p.tagName + '|' + (p.className?.toString() || '');
+                    if (!byParent[key]) byParent[key] = [];
+                    if (byParent[key].length < 10) byParent[key].push(el);
+                });
+                for (const group of Object.values(byParent)) {
+                    if (group.length >= 2 && group.length <= 8) return group;
+                }
+            }
+
+            return [];
         },
 
-        /** U校园专用的答案填入（点击 .ant-radio-wrapper 等包装器） */
+        /** U校园答案填入 */
         fillAnswer(question, answer) {
             if (!answer) return false;
             const ans = String(answer).trim();
+            addLog(`fillAnswer: type=${question.type}, answer="${ans}", options=${question.options.length}`, 'info');
             try {
                 switch (question.type) {
                     case 'single':
@@ -763,15 +859,16 @@
                         return this._fillChoiceUnipus(question, ans);
                 }
             } catch (e) {
-                addLog(`U校园填入失败: ${e.message}`, 'error');
+                addLog(`U校园填入异常: ${e.message}`, 'error');
                 return false;
             }
         },
 
         _fillChoiceUnipus(question, answer) {
             const letters = (answer.match(/[A-Za-z]/g) || []).map(l => l.toUpperCase());
+            addLog(`_fillChoiceUnipus: letters=${letters.join(',')}, opts=${question.options.map(o=>o.letter).join(',')}`, 'info');
+
             if (letters.length === 0) {
-                // 尝试文字匹配（AI 可能返回选项文本而不是字母）
                 return this._fillByTextMatch(question, answer);
             }
 
@@ -779,22 +876,31 @@
             letters.forEach(letter => {
                 const opt = question.options.find(o => o.letter === letter);
                 if (opt && opt.element) {
+                    addLog(`点击选项 ${letter}: <${opt.element.tagName}> class="${opt.element.className?.toString()?.substring(0,30)}"`, 'info');
                     this._clickElement(opt.element);
                     filled = true;
-                    addLog(`U校园点击选项 ${letter}`, 'info');
+                } else {
+                    addLog(`未找到选项 ${letter}`, 'warn');
                 }
             });
+
+            // 字母匹配失败时尝试文字匹配
+            if (!filled) {
+                addLog('字母匹配失败，尝试文字匹配...', 'warn');
+                return this._fillByTextMatch(question, answer);
+            }
             return filled;
         },
 
         _fillByTextMatch(question, answer) {
-            const cleanAns = answer.replace(/^[A-Za-z][.\s、:：]*/, '').trim();
+            const cleanAns = answer.replace(/^[A-Za-z][.\s、:：)]*/, '').trim();
+            addLog(`文字匹配: 搜索 "${cleanAns.substring(0,40)}"`, 'info');
             for (const opt of question.options) {
-                const optText = opt.text.replace(/^[A-Za-z][.\s、:：]*/, '').trim();
+                const optText = opt.text.replace(/^[A-Za-z][.\s、:：)]*/, '').trim();
                 if (optText.includes(cleanAns) || cleanAns.includes(optText)) {
+                    addLog(`文字匹配命中 ${opt.letter}: ${optText.substring(0,30)}`, 'info');
                     if (opt.element) {
                         this._clickElement(opt.element);
-                        addLog(`U校园文字匹配选项 ${opt.letter}`, 'info');
                         return true;
                     }
                 }
@@ -817,13 +923,10 @@
                 'input[type="text"], input:not([type]), textarea, [contenteditable="true"]'
             );
             if (inputs.length === 0) return false;
-
             const parts = answer.split(/[,;，；\s|]+/).filter(Boolean);
             inputs.forEach((input, i) => {
                 if (i < parts.length) {
-                    const nativeSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLInputElement.prototype, 'value'
-                    );
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
                     if (nativeSetter && nativeSetter.set) {
                         nativeSetter.set.call(input, parts[i]);
                     } else {
@@ -831,31 +934,45 @@
                     }
                     input.dispatchEvent(new Event('input', { bubbles: true }));
                     input.dispatchEvent(new Event('change', { bubbles: true }));
-                    // Vue/React 兼容
                     input.dispatchEvent(new Event('compositionend', { bubbles: true }));
                 }
             });
             return true;
         },
 
-        /** 安全点击（兼容多种框架） */
+        /** 安全点击 */
         _clickElement(el) {
             if (!el) return;
             try {
-                // 直接 click
-                if (typeof el.click === 'function') el.click();
-                // MouseEvent 触发（有些框架只监听这个）
-                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                // 如果没反应，尝试点击内部的 input
-                const innerInput = el.querySelector('input[type="radio"], input[type="checkbox"]');
-                if (innerInput && innerInput !== el) {
-                    innerInput.checked = true;
-                    innerInput.dispatchEvent(new Event('change', { bubbles: true }));
+                // 确保元素可见可点
+                if (typeof el.click === 'function') {
+                    el.click();
+                    addLog('  → click() 已调用', 'info');
+                }
+                // 完整鼠标事件链
+                ['mousedown', 'mouseup', 'click'].forEach(type => {
+                    el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+                });
+                // 点击内部 input/radio
+                const inner = el.querySelector('input[type="radio"], input[type="checkbox"]');
+                if (inner && inner !== el) {
+                    inner.checked = true;
+                    inner.dispatchEvent(new Event('change', { bubbles: true }));
+                    addLog('  → 内部 input checked', 'info');
+                }
+                // 还不行的话，尝试点 el 的所有可点父元素
+                if (!el.checked && el.tagName !== 'INPUT') {
+                    let p = el.parentElement;
+                    for (let i = 0; i < 3 && p; i++) {
+                        if (typeof p.click === 'function' && p !== el) {
+                            p.click();
+                            addLog(`  → 父元素 <${p.tagName}> click()`, 'info');
+                        }
+                        p = p.parentElement;
+                    }
                 }
             } catch (e) {
-                addLog(`点击元素异常: ${e.message}`, 'warn');
+                addLog(`点击异常: ${e.message}`, 'warn');
             }
         },
 
