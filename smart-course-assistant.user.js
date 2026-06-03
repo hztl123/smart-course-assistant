@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手 (OCS + U校园AI)
 // @namespace    smart-course-assistant
-// @version      2.0.0
+// @version      2.0.1
 // @description  超星/智慧树/职教云/中国大学MOOC（OCS引擎）+ U校园DeepSeek AI搜题
 // @author       hztl (OCS by enncy, U校园AI by hztl)
 // @license      MIT
@@ -23488,34 +23488,47 @@ const infos = GM_info;
             // ── 去重 ──
             var deduped = [];
             var seenStems = new Set();
+            var filterReasons = { part: 0, short: 0, dup: 0, opts: 0, review: 0 };
             for (var di = 0; di < questions.length; di++) {
                 var q = questions[di];
                 var s = q.stem;
                 // 过滤章节标题
-                if (/^(Part|Section|Unit|Chapter)\s+[IVXⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ\d]+/i.test(s)) continue;
-                if (/^(Directions|Instructions|Listening|Reading|Writing|Translation)/i.test(s)) continue;
-                if (s.length < 10) continue;
+                if (/^(Part|Section|Unit|Chapter)\s+[IVXⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ\d]+/i.test(s)) { filterReasons.part++; continue; }
+                if (/^(Directions|Instructions|Listening|Reading|Writing|Translation)/i.test(s)) { filterReasons.part++; continue; }
+                if (s.length < 10) { filterReasons.short++; continue; }
                 var key = s.substring(0, 40).toLowerCase();
-                if (seenStems.has(key)) continue;
+                if (seenStems.has(key)) { filterReasons.dup++; continue; }
                 seenStems.add(key);
-                if (q.options.length < 2 || q.options.length > 8) continue;
-                // 过滤复习页（过半是 selected 且无 question-common-abs-choice）
+                if (q.options.length < 2 || q.options.length > 8) { filterReasons.opts++; continue; }
+                // 统计选项 class 类型
                 var reviewCount = 0, realCount = 0;
                 q.options.forEach(function (o) {
                     var c = (o.element && o.element.className || '').toString();
                     if (/\bselected\b/.test(c)) reviewCount++;
                     if (/\bquestion-common-abs-choice\b/.test(c)) realCount++;
                 });
-                if (realCount > 0 && realCount < q.options.length && reviewCount > 0) {
+                // 安全过滤：只有当 question-common-abs-choice 选项占多数时才过滤（否则可能是误判）
+                if (realCount >= 3 && realCount >= q.options.length * 0.5 && reviewCount > 0) {
                     q.options = q.options.filter(function (o) {
                         return /\bquestion-common-abs-choice\b/.test((o.element && o.element.className || '').toString());
                     });
                 }
-                if (reviewCount >= q.options.length * 0.5 && realCount === 0) continue;
+                // 过半是 review/selected 且无真正的答题选项 → 跳过
+                if (reviewCount >= q.options.length * 0.5 && realCount === 0) { filterReasons.review++; continue; }
                 deduped.push(q);
             }
 
-            addLog('U校园检测: 原始' + questions.length + '题 → 去重' + deduped.length + '题', 'info');
+            // 每道题的选项 class 详情（前5题）
+            for (var i = 0; i < Math.min(5, deduped.length); i++) {
+                var q = deduped[i];
+                var optInfo = q.options.map(function (o) {
+                    return o.letter + '.(' + (o.element ? o.element.tagName : '?') + ')[' + ((o.element && o.element.className) || '无class').substring(0, 30) + ']';
+                }).join(' ');
+                addLog('  Q' + (i+1) + ': [' + q.type + '] n=' + q.options.length + ' ' + q.stem.substring(0, 50) + '... | ' + optInfo, 'info');
+            }
+            if (deduped.length > 5) addLog('  ... 还有 ' + (deduped.length - 5) + ' 题', 'info');
+
+            addLog('U校园检测: 原始' + questions.length + '题 → 去重' + deduped.length + '题 (过滤:章节' + filterReasons.part + ' 太短' + filterReasons.short + ' 重复' + filterReasons.dup + ' 选项异常' + filterReasons.opts + ' 复习页' + filterReasons.review + ')', 'info');
             return deduped;
         },
 
@@ -23701,7 +23714,13 @@ const infos = GM_info;
         },
 
         _fillByTextMatch: function (question, answer) {
-            var cleanAns = answer.replace(/^[A-Za-z][.\s、:：)]*/, '').trim();
+            var cleanAns = answer.replace(/^[A-Za-z][.\s、:：)]*/, '').replace(/^[A-Za-z]+\s*/, '').trim();
+            // 空答案不做文字匹配（否则 indexOf("") 对任何字符串返回0，导致假匹配）
+            if (!cleanAns || cleanAns.length < 2) {
+                addLog('  文字匹配: 答案过短/为空("' + cleanAns + '")，跳过', 'warn');
+                return false;
+            }
+            addLog('  文字匹配: 搜索 "' + cleanAns.substring(0, 40) + '"', 'info');
             for (var oi = 0; oi < question.options.length; oi++) {
                 var opt = question.options[oi];
                 var optText = opt.text.replace(/^[A-Za-z][.\s、:：)]*/, '').trim();
