@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.3
+// @version      1.0.4
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
@@ -608,8 +608,15 @@
                     const c = (o.element?.className || '').toString();
                     return /\bquestion-common-abs-choice\b/.test(c);
                 }).length;
+                // 有真实选项混着 review 元素 → 只保留真实选项
+                if (realCount > 0 && realCount < q.options.length && reviewCount > 0) {
+                    q.options = q.options.filter(o => {
+                        const c = (o.element?.className || '').toString();
+                        return /\bquestion-common-abs-choice\b/.test(c);
+                    });
+                }
                 // 过半是 review 元素且没有真实的答题选项 → 跳过
-                if (reviewCount >= q.options.length * 0.6 && realCount === 0) {
+                if (reviewCount >= q.options.length * 0.5 && realCount === 0) {
                     skipped.review++;
                     return;
                 }
@@ -945,7 +952,12 @@
         },
 
         _fillChoiceUnipus(question, answer) {
-            const letters = (answer.match(/[A-Za-z]/g) || []).map(l => l.toUpperCase());
+            let letters = (answer.match(/[A-Za-z]/g) || []).map(l => l.toUpperCase());
+            // 单选只取第一个字母（AI 偶尔返回 "B A B D C" 这种多余输出）
+            if (question.type === 'single' && letters.length > 1) {
+                addLog(`  → AI返回多字母"${answer}"，单选只取首字母"${letters[0]}"`, 'warn');
+                letters = [letters[0]];
+            }
             addLog(`_fillChoiceUnipus: letters=${letters.join(',')}, opts=${question.options.map(o=>o.letter).join(',')}`, 'info');
 
             if (letters.length === 0) {
