@@ -610,7 +610,7 @@
                 for (let i = 0; i < Math.min(3, deduped.length); i++) {
                     const q = deduped[i];
                     const optInfo = q.options.map(o =>
-                        `${o.letter}.<${o.element?.tagName}>[${(o.element?.className||'无class').substring(0,25)}]`
+                        `${o.letter}.(${o.element?.tagName})[${(o.element?.className||'无class').substring(0,25)}]`
                     ).join(' ');
                     addLog(`  Q${i+1}: [${q.type}] ${q.stem.substring(0,50)}... | ${optInfo}`, 'info');
                 }
@@ -623,7 +623,7 @@
                     for (let i = 0; i < Math.min(5, questions.length); i++) {
                         const q = questions[i];
                         const optInfo = q.options.map(o =>
-                            `${o.letter}.<${o.element?.tagName}>[${(o.element?.className||'无class').substring(0,25)}]`
+                            `${o.letter}.(${o.element?.tagName})[${(o.element?.className||'无class').substring(0,25)}]`
                         ).join(' ');
                         addLog(`  Q${i+1}: [${q.type}] n=${q.options.length} stem="${q.stem.substring(0,40)}" | ${optInfo}`, 'warn');
                     }
@@ -692,7 +692,36 @@
                 return { type, stem, options, container, raw: stem };
             }
 
-            // --- 策略C: 文字模式 —— 找 A. B. C. D. 或 ①②③④ 开头的元素 ---
+            // --- 策略C: U校园专属 —— question-common-abs-choice / option-wrap ---
+            options.length = 0;
+            const unipusSels = '.question-common-abs-choice, .option-wrap, [class*="common-abs-choice"], [class*="option-wrap"]';
+            const unipusOpts = Array.from(container.querySelectorAll(unipusSels));
+            if (unipusOpts.length >= 2 && unipusOpts.length <= 8) {
+                // 按 class 名分组，只保留最大的组（过滤混入的 review 元素）
+                const byClass = {};
+                unipusOpts.forEach(el => {
+                    const cls = (el.className || '').toString().split(' ').filter(c => c && !/selected|checked|active|hover|focus/i.test(c)).sort().join(' ');
+                    if (!byClass[cls]) byClass[cls] = [];
+                    byClass[cls].push(el);
+                });
+                // 取最大组
+                const largest = Object.values(byClass).sort((a, b) => b.length - a.length)[0];
+                if (largest && largest.length >= 2 && largest.length <= 6) {
+                    type = type || 'single';
+                    largest.forEach((el, i) => {
+                        const text = (el.textContent || el.innerText || '').replace(/\s+/g, ' ').trim();
+                        if (text && text.length > 0) {
+                            options.push({ index: i, letter: String.fromCharCode(65 + i), text, element: el });
+                        }
+                    });
+                }
+                if (options.length >= 2) {
+                    addLog(`U校园解析(unipus): type=${type}, n=${options.length}`, 'info');
+                    return { type, stem, options, container, raw: stem };
+                }
+            }
+
+            // --- 策略D: 文字模式 —— 找 A. B. C. D. 或 ①②③④ 开头的元素 ---
             options.length = 0;
             const letterPattern = container.querySelectorAll('[class*="option"], [class*="choice"], [class*="answer-"], li, .item, [data-index], [data-option]');
             const letterOptions = [];
@@ -1927,7 +1956,7 @@
         if (!area) return;
         const recent = LOG_LINES.slice(-30);
         area.innerHTML = recent.map(l =>
-            `<div class="sca-log-line"><span class="sca-log-time">${l.time}</span><span class="sca-log-msg ${l.type}">${l.msg}</span></div>`
+            `<div class="sca-log-line"><span class="sca-log-time">${l.time}</span><span class="sca-log-msg ${l.type}">${escapeHtml(l.msg)}</span></div>`
         ).join('');
         area.scrollTop = area.scrollHeight;
     }
