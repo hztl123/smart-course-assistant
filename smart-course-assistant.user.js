@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.5
+// @version      1.0.6
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
@@ -80,7 +80,7 @@
             apiKey: '',
             model: 'deepseek-chat',
             baseUrl: 'https://api.deepseek.com/chat/completions',
-            timeout: 15000,
+            timeout: 12000,
         },
     };
 
@@ -698,7 +698,6 @@
             if (radios.length >= 2) { type = type || 'single'; collectOptions(radios); }
             if (checks.length >= 2) { type = type || 'multi'; collectOptions(checks); }
             if (options.length >= 2) {
-                addLog(`U校园解析(input): type=${type}, n=${options.length}`, 'info');
                 return { type, stem, options, container, raw: stem };
             }
 
@@ -709,7 +708,6 @@
             if (antRadios.length >= 2) { type = type || 'single'; collectOptions(antRadios); }
             if (antChecks.length >= 2 && options.length === 0) { type = type || 'multi'; collectOptions(antChecks); }
             if (options.length >= 2) {
-                addLog(`U校园解析(Ant): type=${type}, n=${options.length}`, 'info');
                 return { type, stem, options, container, raw: stem };
             }
 
@@ -738,7 +736,7 @@
                     });
                 }
                 if (options.length >= 2) {
-                    addLog(`U校园解析(unipus): type=${type}, n=${options.length}`, 'info');
+                return { type, stem, options, container, raw: stem };
                     return { type, stem, options, container, raw: stem };
                 }
             }
@@ -759,7 +757,7 @@
                 letterOptions.forEach((item, i) => {
                     options.push({ index: i, letter: String.fromCharCode(65 + i), text: item.text, element: item.el });
                 });
-                addLog(`U校园解析(文字模式): type=${type}, n=${options.length}`, 'info');
+                return { type, stem, options, container, raw: stem };
                 return { type, stem, options, container, raw: stem };
             }
 
@@ -777,7 +775,7 @@
                     }
                 });
                 if (options.length >= 2) {
-                    addLog(`U校园解析(泛化): type=${type}, n=${options.length}`, 'info');
+                return { type, stem, options, container, raw: stem };
                     return { type, stem, options, container, raw: stem };
                 }
             }
@@ -799,7 +797,7 @@
                 if (t) options.push({ index: 0, letter: 'A', text: '正确', element: t.element });
                 if (f) options.push({ index: 1, letter: 'B', text: '错误', element: f.element });
                 if (options.length >= 2) {
-                    addLog(`U校园解析(判断): n=${options.length}`, 'info');
+                return { type, stem, options, container, raw: stem };
                     return { type, stem, options, container, raw: stem };
                 }
             }
@@ -807,7 +805,7 @@
             // --- 策略F: 填空 ---
             const textInputs = container.querySelectorAll('input[type="text"], input:not([type]), textarea, [contenteditable="true"]');
             if (textInputs.length > 0 && !forceType) {
-                addLog(`U校园解析(填空): inputs=${textInputs.length}`, 'info');
+                return { type: 'fill', stem, options: [], container, raw: stem, inputs: Array.from(textInputs) };
                 return { type: 'fill', stem, options: [], container, raw: stem, inputs: Array.from(textInputs) };
             }
 
@@ -2373,6 +2371,7 @@
             // 截取题干前40字符作为标识
             const qLabel = q.stem.replace(/\s+/g, ' ').trim().substring(0, 40);
             addLog(`Q${qi+1}/${questions.length} [${q.type==='single'?'单选':q.type==='multi'?'多选':q.type==='judge'?'判断':'填空'}] ${qLabel}`, 'info');
+            document.getElementById('sca-title').textContent = `AI思考中: ${qLabel}...`;
 
             const result = await AIModule.search(q);
             if (result) {
