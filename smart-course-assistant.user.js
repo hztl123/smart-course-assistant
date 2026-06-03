@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.6
+// @version      1.0.7
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
@@ -602,7 +602,7 @@
                 // 跳过批改/复习展示页（过半选项带 selected/isNotReview 且无 question-common-abs-choice）
                 const reviewCount = q.options.filter(o => {
                     const c = (o.element?.className || '').toString();
-                    return /\bselected\b/.test(c) || /\bisNotReview\b/.test(c);
+                    return /\bselected\b/.test(c);
                 }).length;
                 const realCount = q.options.filter(o => {
                     const c = (o.element?.className || '').toString();
@@ -2036,7 +2036,7 @@
     /** 更新日志区域 */
     function updateLogArea() {
         const area = document.getElementById('sca-log-area');
-        if (!area) return;
+        if (!area || !area.isConnected) return;
         const recent = LOG_LINES.slice(-30);
         area.innerHTML = recent.map(l =>
             `<div class="sca-log-line"><span class="sca-log-time">${l.time}</span><span class="sca-log-msg ${l.type}">${escapeHtml(l.msg)}</span></div>`
@@ -2046,8 +2046,9 @@
 
     /** 更新面板状态 */
     function updatePanel() {
-        const isDuration = Config.get('mode') === 'duration';
         const dot = document.getElementById('sca-dot');
+        if (!dot) return; // 面板被移除则跳过
+        const isDuration = Config.get('mode') === 'duration';
         const statusText = document.getElementById('sca-status-text');
         const btnStart = document.getElementById('sca-btn-start');
         const platform = document.getElementById('sca-platform');
