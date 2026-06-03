@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.4
+// @version      1.0.5
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
@@ -1237,7 +1237,7 @@
                     data: JSON.stringify({
                         model: model,
                         messages: [
-                            { role: 'system', content: '你是一个精准的答题助手。只输出正确答案的字母或文字，不要解释。' },
+                            { role: 'system', content: '你是答题机器人。单选题只输出1个大写字母(如B)。多选题输出字母连写(如ABC)。判断题只输出"正确"或"错误"。填空题只输出答案文本。禁止输出空格、换行、解释、标点、或其他任何内容。' },
                             { role: 'user', content: prompt },
                         ],
                         temperature: 0.1,
@@ -1621,6 +1621,8 @@
                 // 检测题目
                 const questions = this.adapter.detectQuestions();
                 if (questions.length > 0 && Config.get('autoAnswer')) {
+                    STATE.total = questions.length;
+                    STATE.remaining = questions.length;
                     handleQuestions(questions);
                 }
 
@@ -2307,6 +2309,8 @@
             const questions = adapter.detectQuestions();
             if (questions.length > 0 && Config.get('autoAnswer')) {
                 addLog(`检测到 ${questions.length} 道题目`, 'info');
+                STATE.total = questions.length;
+                STATE.remaining = questions.length;
                 await handleQuestions(questions);
             }
 
@@ -2374,6 +2378,9 @@
             if (result) {
                 const filled = STATE.adapter.fillAnswer(q, result.answer);
                 if (filled) {
+                    STATE.completed++;
+                    STATE.remaining = Math.max(0, STATE.remaining - 1);
+                    updatePanel();
                     addLog(`Q${qi+1} ✅ 已填入: ${result.answer} | 来源:${result.source} | ${qLabel}`, 'success');
 
                     // 自动提交
