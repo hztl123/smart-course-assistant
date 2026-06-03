@@ -592,8 +592,8 @@
             const skipped = { part: 0, short: 0, dup: 0, opts: 0 };
             questions.forEach(q => {
                 const s = q.stem;
-                if (/^Part\s+[IVX]+\b/i.test(s) && q.options.length > 6) { skipped.part++; return; }
-                if (/^(Section|Unit|Chapter)\s+\d+/i.test(s)) { skipped.part++; return; }
+                if (/^(Part|Section|Unit|Chapter)\s+[IVXⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ\d]+\b/i.test(s)) { skipped.part++; return; }
+                if (/^(Directions|Instructions|Listening|Reading|Writing|Translation)\b/i.test(s)) { skipped.part++; return; }
                 if (s.length < 10) { skipped.short++; return; }
                 const key = s.substring(0, 40).toLowerCase();
                 if (seenStems.has(key)) { skipped.dup++; return; }
@@ -1003,37 +1003,50 @@
             return true;
         },
 
-        /** 安全点击 */
+        /** 安全点击（尝试所有可能的点击目标） */
         _clickElement(el) {
             if (!el) return;
             try {
-                // 确保元素可见可点
+                const origEl = el;
+
+                // 策略0: 跳过已选中的选项（复习/批改模式）
+                const cls = (el.className || '').toString();
+                if (/\bselected\b/.test(cls)) {
+                    addLog('  → 选项已选中(复习模式)，跳过点击', 'info');
+                }
+
+                // 策略1: 点击内部的可交互子元素
+                const innerTargets = el.querySelectorAll('input, label, span, a, button, [class*="inner"], [class*="radio"], [class*="check"]');
+                for (const t of innerTargets) {
+                    try {
+                        if (typeof t.click === 'function') { t.click(); }
+                        t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                        t.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                        t.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                    } catch (e) { }
+                }
+
+                // 策略2: 点击元素本身
                 if (typeof el.click === 'function') {
                     el.click();
                     addLog('  → click() 已调用', 'info');
                 }
-                // 完整鼠标事件链
                 ['mousedown', 'mouseup', 'click'].forEach(type => {
                     el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
                 });
-                // 点击内部 input/radio
-                const inner = el.querySelector('input[type="radio"], input[type="checkbox"]');
-                if (inner && inner !== el) {
-                    inner.checked = true;
-                    inner.dispatchEvent(new Event('change', { bubbles: true }));
-                    addLog('  → 内部 input checked', 'info');
-                }
-                // 还不行的话，尝试点 el 的所有可点父元素
-                if (!el.checked && el.tagName !== 'INPUT') {
-                    let p = el.parentElement;
-                    for (let i = 0; i < 3 && p; i++) {
-                        if (typeof p.click === 'function' && p !== el) {
+
+                // 策略3: 点父元素链
+                let p = el.parentElement;
+                for (let i = 0; i < 4 && p; i++) {
+                    try {
+                        if (typeof p.click === 'function' && p !== document.body) {
                             p.click();
-                            addLog(`  → 父元素 <${p.tagName}> click()`, 'info');
+                            p.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
                         }
-                        p = p.parentElement;
-                    }
+                    } catch (e) { }
+                    p = p.parentElement;
                 }
+
             } catch (e) {
                 addLog(`点击异常: ${e.message}`, 'warn');
             }
@@ -1194,14 +1207,18 @@
                         try {
                             const res = JSON.parse(resp.responseText);
                             if (res.choices && res.choices[0]) {
-                                const answer = (res.choices[0].message.content || '').trim();
-                                // 清理常见前缀
-                                const clean = answer
+                                const raw = (res.choices[0].message.content || '').trim();
+                                const answer = raw
                                     .replace(/^(答案[是为：:]?\s*)/i, '')
                                     .replace(/^(正确选项[是为：:]?\s*)/i, '')
                                     .replace(/^(选\s*)/i, '')
+                                    .replace(/^["'`]|["'`]$/g, '')
                                     .trim();
-                                resolve({ answer: clean, confidence: 0.85, source: 'AI' });
+                                // 诊断：记录原始返回
+                                if (!answer) {
+                                    addLog(`AI返回空内容: raw="${raw.substring(0,50)}" finish_reason=${res.choices[0].finish_reason}`, 'warn');
+                                }
+                                resolve({ answer, confidence: answer ? 0.85 : 0, source: 'AI' });
                             } else {
                                 addLog(`AI返回异常: ${JSON.stringify(res).substring(0, 200)}`, 'warn');
                                 resolve(null);
