@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         智能刷课助手
 // @namespace    smart-course-assistant
-// @version      1.0.0
+// @version      1.0.1
 // @description  超星学习通 / U校园 智能刷课刷题助手 | AI搜题 · 倍速播放 · 防卡顿 · 挂时长
 // @author       hztl
 // @match        *://*.chaoxing.com/*
@@ -589,42 +589,45 @@
             // ── 去重：按题干相似度去重 ──
             const deduped = [];
             const seenStems = new Set();
+            const skipped = { part: 0, short: 0, dup: 0, opts: 0 };
             questions.forEach(q => {
-                // 过滤明显的章节标题
                 const s = q.stem;
-                if (/^Part\s+[IVX]+\b/i.test(s) && q.options.length > 6) return; // "Part I Vocabulary..." 跳过
-                if (/^(Section|Unit|Chapter)\s+\d+/i.test(s)) return;
-                if (s.length < 10) return;
-
-                // 取题干前40个字符做去重key
+                if (/^Part\s+[IVX]+\b/i.test(s) && q.options.length > 6) { skipped.part++; return; }
+                if (/^(Section|Unit|Chapter)\s+\d+/i.test(s)) { skipped.part++; return; }
+                if (s.length < 10) { skipped.short++; return; }
                 const key = s.substring(0, 40).toLowerCase();
-                if (seenStems.has(key)) return;
+                if (seenStems.has(key)) { skipped.dup++; return; }
                 seenStems.add(key);
-
-                // 选项数量异常的跳过（4-6个是正常范围，2-8也可接受）
-                if (q.options.length < 2 || q.options.length > 8) return;
-
+                if (q.options.length < 2 || q.options.length > 8) { skipped.opts++; return; }
                 deduped.push(q);
             });
 
-            // 诊断日志
-            console.log('[刷课助手|U校园] 题目检测诊断:', ...debugInfo);
-            console.log(`[刷课助手|U校园] 原始: ${questions.length} 道, 去重后: ${deduped.length} 道`);
-            deduped.forEach((q, i) => {
-                const optInfo = q.options.map(o =>
-                    `${o.letter}. tag=<${o.element?.tagName}> class="${(o.element?.className||'').substring(0,30)}" text="${o.text.substring(0,30)}"`
-                ).join(' | ');
-                console.log(`[刷课助手|U校园] Q${i+1}: type=${q.type} stem="${q.stem.substring(0,50)}..."`);
-                console.log(`  Options: ${optInfo}`);
-            });
+            // 诊断信息全部输出到面板日志（Tampermonkey 可能拦截 console.log）
+            addLog(`U校园检测: 原始${questions.length}题 → 去重${deduped.length}题 (过滤:章节${skipped.part} 太短${skipped.short} 重复${skipped.dup} 选项异常${skipped.opts})`, 'info');
 
-            // 同步输出到面板日志
             if (deduped.length > 0) {
-                const sample = deduped[0];
-                const optSample = sample.options.map(o =>
-                    `${o.letter}.<${o.element?.tagName}>.${(o.element?.className||'').substring(0,20)}`
-                ).join(', ');
-                addLog(`U校园: 去重后${deduped.length}题, 示例[${sample.type}] el=${optSample}`, 'info');
+                // 输出前3题的详情
+                for (let i = 0; i < Math.min(3, deduped.length); i++) {
+                    const q = deduped[i];
+                    const optInfo = q.options.map(o =>
+                        `${o.letter}.<${o.element?.tagName}>[${(o.element?.className||'无class').substring(0,25)}]`
+                    ).join(' ');
+                    addLog(`  Q${i+1}: [${q.type}] ${q.stem.substring(0,50)}... | ${optInfo}`, 'info');
+                }
+                if (deduped.length > 3) addLog(`  ... 还有 ${deduped.length - 3} 题`, 'info');
+            } else {
+                addLog(`⚠️ 未找到有效题目！原始${questions.length}题全部被过滤`, 'warn');
+                // 降级：放宽过滤条件再试
+                if (questions.length > 0) {
+                    addLog(`降级模式：放宽条件，输出前5题详情用于调试`, 'warn');
+                    for (let i = 0; i < Math.min(5, questions.length); i++) {
+                        const q = questions[i];
+                        const optInfo = q.options.map(o =>
+                            `${o.letter}.<${o.element?.tagName}>[${(o.element?.className||'无class').substring(0,25)}]`
+                        ).join(' ');
+                        addLog(`  Q${i+1}: [${q.type}] n=${q.options.length} stem="${q.stem.substring(0,40)}" | ${optInfo}`, 'warn');
+                    }
+                }
             }
 
             return deduped;
