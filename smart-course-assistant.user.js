@@ -589,7 +589,7 @@
             // ── 去重：按题干相似度去重 ──
             const deduped = [];
             const seenStems = new Set();
-            const skipped = { part: 0, short: 0, dup: 0, opts: 0 };
+            const skipped = { part: 0, short: 0, dup: 0, opts: 0, review: 0 };
             questions.forEach(q => {
                 const s = q.stem;
                 if (/^(Part|Section|Unit|Chapter)\s+[IVXⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ\d]+\b/i.test(s)) { skipped.part++; return; }
@@ -599,11 +599,17 @@
                 if (seenStems.has(key)) { skipped.dup++; return; }
                 seenStems.add(key);
                 if (q.options.length < 2 || q.options.length > 8) { skipped.opts++; return; }
+                // 跳过批改/复习展示页（所有选项都带 selected 或 isNotReview）
+                const reviewCount = q.options.filter(o => {
+                    const c = (o.element?.className || '').toString();
+                    return /\bselected\b/.test(c) || /\bisNotReview\b/.test(c) || /\bis-review\b/i.test(c);
+                }).length;
+                if (reviewCount >= q.options.length) { skipped.opts++; return; }
                 deduped.push(q);
             });
 
             // 诊断信息全部输出到面板日志（Tampermonkey 可能拦截 console.log）
-            addLog(`U校园检测: 原始${questions.length}题 → 去重${deduped.length}题 (过滤:章节${skipped.part} 太短${skipped.short} 重复${skipped.dup} 选项异常${skipped.opts})`, 'info');
+            addLog(`U校园检测: 原始${questions.length}题 → 去重${deduped.length}题 (过滤:章节${skipped.part} 太短${skipped.short} 重复${skipped.dup} 选项异常${skipped.opts} 复习页${skipped.review})`, 'info');
 
             if (deduped.length > 0) {
                 // 输出前3题的详情
